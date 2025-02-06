@@ -1,0 +1,11 @@
+Package: com.ps.sfsymbols
+Name: SFSymbols
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Tweak to make iOS uses SF Symbols provided by SFSymbolsAssets package.
+Maintainer: PoomSmart
+Author: PoomSmart
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 13.0), firmware (<< 18.0), com.ps.sfsymbolsassets
+Depiction: https://poomsmart.github.io/repo/depictions/sfsymbols.html
+SileoDepiction: https://poomsmart.github.io/repo/sileodepictions/sfsymbols.json
