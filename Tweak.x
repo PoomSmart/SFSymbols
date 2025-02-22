@@ -1,8 +1,21 @@
 #define CHECK_TARGET
 #import <Foundation/NSBundle.h>
+#import <PSHeader/iOSVersions.h>
 #import <PSHeader/PS.h>
 #import <UIKit/UIImage.h>
-#import <version.h>
+#import <UIKit/UIImageSymbolConfiguration.h>
+
+@interface UIColor (Private)
++ (instancetype)tintColor;
+@end
+
+@interface UIImageSymbolConfiguration (Compat)
++ (instancetype)configurationWithPaletteColors:(NSArray <UIColor *> *)colors;
+@end
+
+@interface UIImageSymbolConfiguration (Private)
+- (NSArray <UIColor *> *)_colors;
+@end
 
 %hook NSBundle
 
@@ -14,6 +27,19 @@
         path = PS_ROOT_PATH_NS(@"/Library/Application Support/SFSymbols/CoreGlyphsPrivate.bundle");
     NSBundle *bundle = %orig(path);
     return bundle ?: %orig(origPath);
+}
+
+%end
+
+%hook UIImage
+
++ (UIImage *)systemImageNamed:(NSString *)name withConfiguration:(UIImageSymbolConfiguration *)configuration {
+    if (IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0) && [configuration _colors].count == 0) {
+        configuration = [configuration configurationByApplyingConfiguration:[UIImageSymbolConfiguration configurationWithPaletteColors:@[
+            UIColor.tintColor, UIColor.tintColor, UIColor.tintColor,
+        ]]];
+    }
+    return %orig(name, configuration);
 }
 
 %end
