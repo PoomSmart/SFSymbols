@@ -9,6 +9,10 @@
 + (instancetype)tintColor;
 @end
 
+@interface UIImage (Private)
+- (NSUInteger)_numberOfHierarchyLayers;
+@end
+
 @interface UIImageSymbolConfiguration (Compat)
 + (instancetype)configurationWithPaletteColors:(NSArray <UIColor *> *)colors;
 @end
@@ -31,15 +35,35 @@
 
 %end
 
+%hook SFSCoreGlyphsBundle
+
++ (NSBundle *)public {
+    NSString *path = PS_ROOT_PATH_NS(@"/Library/Application Support/SFSymbols/CoreGlyphs.bundle");
+    NSBundle *bundle = [NSBundle bundleWithPath:path];
+    return bundle ?: %orig;
+}
+
++ (NSBundle *)private {
+    NSString *path = PS_ROOT_PATH_NS(@"/Library/Application Support/SFSymbols/CoreGlyphsPrivate.bundle");
+    NSBundle *bundle = [NSBundle bundleWithPath:path];
+    return bundle ?: %orig;
+}
+
+%end
+
 %hook UIImage
 
-+ (UIImage *)systemImageNamed:(NSString *)name withConfiguration:(UIImageSymbolConfiguration *)configuration {
-    if (IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0) && [configuration _colors].count == 0) {
-        configuration = [configuration configurationByApplyingConfiguration:[UIImageSymbolConfiguration configurationWithPaletteColors:@[
-            UIColor.tintColor, UIColor.tintColor, UIColor.tintColor,
-        ]]];
++ (UIImage *)systemImageNamed:(NSString *)name withConfiguration:(UIImageConfiguration *)configuration {
+    UIImage *image = %orig;
+    if (IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0) && [configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0) {
+        NSUInteger layerCount = [image _numberOfHierarchyLayers];
+        NSMutableArray <UIColor *> *colors = [NSMutableArray arrayWithCapacity:layerCount];
+        for (NSUInteger i = 0; i < layerCount; i++)
+            [colors addObject:UIColor.tintColor];
+        configuration = [configuration configurationByApplyingConfiguration:[UIImageSymbolConfiguration configurationWithPaletteColors:colors]];
+        image = [image imageWithConfiguration:configuration];
     }
-    return %orig(name, configuration);
+    return image;
 }
 
 %end
