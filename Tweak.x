@@ -97,15 +97,17 @@ static NSBundle *privateBundle() {
     UIImage *image = %orig;
     HBLogDebug(@"Processing image named '%@' with configuration %@", name, configuration);
     if (IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0)) {
-        NSUInteger layerCount = [image _numberOfHierarchyLayers];
-        NSMutableArray <UIColor *> *colors = [NSMutableArray arrayWithCapacity:layerCount];
-        for (NSUInteger i = 0; i < layerCount; i++)
-            [colors addObject:UIColor.tintColor];
-        UIImageSymbolConfiguration *paletteConfiguration = [UIImageSymbolConfiguration configurationWithPaletteColors:colors];
-        UIImageConfiguration *newConfiguration = [configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0
-            ? [configuration configurationByApplyingConfiguration:paletteConfiguration]
-            : paletteConfiguration;
-        image = [image imageWithConfiguration:newConfiguration];
+        if ([name containsString:@"stack"]) {
+            NSUInteger layerCount = [image _numberOfHierarchyLayers];
+            NSMutableArray <UIColor *> *colors = [NSMutableArray arrayWithCapacity:layerCount];
+            for (NSUInteger i = 0; i < layerCount; i++)
+                [colors addObject:UIColor.tintColor];
+            UIImageSymbolConfiguration *paletteConfiguration = [UIImageSymbolConfiguration configurationWithPaletteColors:colors];
+            UIImageConfiguration *newConfiguration = [configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0
+                ? [configuration configurationByApplyingConfiguration:paletteConfiguration]
+                : paletteConfiguration;
+            image = [image imageWithConfiguration:newConfiguration];
+        }
     }
     return image;
 }
