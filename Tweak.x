@@ -1,5 +1,6 @@
 #define CHECK_TARGET
 #import <Foundation/NSBundle.h>
+#import <HBLog.h>
 #import <PSHeader/iOSVersions.h>
 #import <PSHeader/PS.h>
 #import <UIKit/UIImage.h>
@@ -90,17 +91,21 @@ static NSBundle *privateBundle() {
 
 %end
 
-%hook UIImage
+%hook _UIAssetManager
 
-+ (UIImage *)systemImageNamed:(NSString *)name withConfiguration:(UIImageConfiguration *)configuration {
+- (UIImage *)imageNamed:(NSString *)name configuration:(UIImageConfiguration *)configuration {
     UIImage *image = %orig;
-    if (IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0) && [configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0) {
+    HBLogDebug(@"Processing image named '%@' with configuration %@", name, configuration);
+    if (IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0)) {
         NSUInteger layerCount = [image _numberOfHierarchyLayers];
         NSMutableArray <UIColor *> *colors = [NSMutableArray arrayWithCapacity:layerCount];
         for (NSUInteger i = 0; i < layerCount; i++)
             [colors addObject:UIColor.tintColor];
-        configuration = [configuration configurationByApplyingConfiguration:[UIImageSymbolConfiguration configurationWithPaletteColors:colors]];
-        image = [image imageWithConfiguration:configuration];
+        UIImageSymbolConfiguration *paletteConfiguration = [UIImageSymbolConfiguration configurationWithPaletteColors:colors];
+        UIImageConfiguration *newConfiguration = [configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0
+            ? [configuration configurationByApplyingConfiguration:paletteConfiguration]
+            : paletteConfiguration;
+        image = [image imageWithConfiguration:newConfiguration];
     }
     return image;
 }
@@ -123,24 +128,23 @@ static NSBundle *privateBundle() {
 %end
 
 %ctor {
-    if (isTarget(TargetTypeApps | TargetTypeGenericExtensions)) {
-        NSBundle *public = publicBundle();
-        if (public) {
-            NSDictionary *aliasDict = [NSDictionary dictionaryWithContentsOfFile:[public pathForResource:@"name_aliases" ofType:@"strings"]];
-            NSArray *symbolArray = [NSArray arrayWithContentsOfFile:[public pathForResource:@"symbol_order" ofType:@"plist"]];
-            allPublicSymbols = aliasDict.allKeys.mutableCopy;
-            [allPublicSymbols addObjectsFromArray:symbolArray];
-        }
-        NSBundle *private = privateBundle();
-        if (private) {
-            NSDictionary *aliasDict = [NSDictionary dictionaryWithContentsOfFile:[private pathForResource:@"name_aliases" ofType:@"strings"]];
-            NSArray *symbolArray = [NSArray arrayWithContentsOfFile:[private pathForResource:@"symbol_order" ofType:@"plist"]];
-            allPrivateSymbols = aliasDict.allKeys.mutableCopy;
-            [allPrivateSymbols addObjectsFromArray:symbolArray];
-        }
-        %init;
-        if (!IS_IOS_OR_NEWER(iOS_15_0)) {
-            %init(preiOS15);
-        }
+    if (!isTarget(TargetTypeApps | TargetTypeGenericExtensions)) return;
+    NSBundle *public = publicBundle();
+    if (public) {
+        NSDictionary *aliasDict = [NSDictionary dictionaryWithContentsOfFile:[public pathForResource:@"name_aliases" ofType:@"strings"]];
+        NSArray *symbolArray = [NSArray arrayWithContentsOfFile:[public pathForResource:@"symbol_order" ofType:@"plist"]];
+        allPublicSymbols = aliasDict.allKeys.mutableCopy;
+        [allPublicSymbols addObjectsFromArray:symbolArray];
+    }
+    NSBundle *private = privateBundle();
+    if (private) {
+        NSDictionary *aliasDict = [NSDictionary dictionaryWithContentsOfFile:[private pathForResource:@"name_aliases" ofType:@"strings"]];
+        NSArray *symbolArray = [NSArray arrayWithContentsOfFile:[private pathForResource:@"symbol_order" ofType:@"plist"]];
+        allPrivateSymbols = aliasDict.allKeys.mutableCopy;
+        [allPrivateSymbols addObjectsFromArray:symbolArray];
+    }
+    %init;
+    if (!IS_IOS_OR_NEWER(iOS_15_0)) {
+        %init(preiOS15);
     }
 }
