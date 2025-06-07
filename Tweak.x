@@ -4,6 +4,7 @@
 #import <PSHeader/iOSVersions.h>
 #import <PSHeader/PS.h>
 #import <UIKit/UIImage.h>
+#import <UIKit/UIImageAsset+Private.h>
 #import <UIKit/UIImageSymbolConfiguration.h>
 
 @interface SFSSymbolAssetInfo : NSObject
@@ -91,25 +92,47 @@ static NSBundle *privateBundle() {
 
 %end
 
-%hook _UIAssetManager
+static BOOL shouldUsePaletteColors(NSString *name) {
+    return [name containsString:@"stack"]
+        || [name containsString:@"speaker"]
+        || [name containsString:@"shared.with.you"]
+        || [name containsString:@"sharedwithyou"]
+        || [name isEqualToString:@"photo.fill.on.rectangle.fill"]
+        || [name isEqualToString:@"square.and.pencil"]
+        || [name hasPrefix:@"person.2"]
+        || [name hasPrefix:@"square.and.arrow"];
+}
 
-- (UIImage *)imageNamed:(NSString *)name configuration:(UIImageConfiguration *)configuration {
-    UIImage *image = %orig;
-    HBLogDebug(@"Processing image named '%@' with configuration %@", name, configuration);
+static UIImage *imageWithExtraConfigurationIfNeeded(UIImage *image, NSString *name, UIImageConfiguration *configuration) {
     if (IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0)) {
-        if ([name containsString:@"stack"]) {
-            NSUInteger layerCount = [image _numberOfHierarchyLayers];
-            NSMutableArray <UIColor *> *colors = [NSMutableArray arrayWithCapacity:layerCount];
-            for (NSUInteger i = 0; i < layerCount; i++)
-                [colors addObject:UIColor.tintColor];
-            UIImageSymbolConfiguration *paletteConfiguration = [UIImageSymbolConfiguration configurationWithPaletteColors:colors];
-            UIImageConfiguration *newConfiguration = [configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0
-                ? [configuration configurationByApplyingConfiguration:paletteConfiguration]
-                : paletteConfiguration;
-            image = [image imageWithConfiguration:newConfiguration];
+        if ([configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0) {
+            if (shouldUsePaletteColors(name)) {
+                HBLogDebug(@"Using palette colors for image named '%@'", name);
+                NSUInteger layerCount = [image _numberOfHierarchyLayers];
+                NSMutableArray <UIColor *> *colors = [NSMutableArray arrayWithCapacity:layerCount];
+                for (NSUInteger i = 0; i < layerCount; i++)
+                    [colors addObject:UIColor.tintColor];
+                UIImageSymbolConfiguration *paletteConfiguration = [UIImageSymbolConfiguration configurationWithPaletteColors:colors];
+                return [image imageWithConfiguration:[configuration configurationByApplyingConfiguration:paletteConfiguration]];
+            }
         }
     }
     return image;
+}
+
+%hook UIImage
+
+- (UIImage *)imageWithConfiguration:(UIImageConfiguration *)configuration {
+    UIImage *image = %orig;
+    return imageWithExtraConfigurationIfNeeded(image, image.imageAsset.assetName, configuration);
+}
+
+%end
+
+%hook _UIAssetManager
+
+- (UIImage *)imageNamed:(NSString *)name configuration:(UIImageConfiguration *)configuration {
+    return imageWithExtraConfigurationIfNeeded(%orig, name, configuration);
 }
 
 %end
