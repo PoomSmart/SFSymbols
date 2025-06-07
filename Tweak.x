@@ -103,7 +103,39 @@ static BOOL shouldUsePaletteColors(NSString *name) {
         || [name hasPrefix:@"square.and.arrow"];
 }
 
-static UIImage *imageWithExtraConfigurationIfNeeded(UIImage *image, NSString *name, UIImageConfiguration *configuration) {
+static BOOL shouldPlay(UIImageConfiguration *configuration) {
+    return IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0) && [configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0;
+}
+
+%hook UIImage
+
+- (UIImage *)imageWithConfiguration:(UIImageConfiguration *)configuration {
+    UIImage *image = %orig;
+    if (shouldPlay(configuration)) {
+        NSString *name = nil;
+        @try {
+            name = image.imageAsset.assetName;
+        } @catch (id ex) {}
+        if (shouldUsePaletteColors(name)) {
+            HBLogDebug(@"Using palette colors for image named '%@'", name);
+            NSUInteger layerCount = [image _numberOfHierarchyLayers];
+            NSMutableArray <UIColor *> *colors = [NSMutableArray arrayWithCapacity:layerCount];
+            for (NSUInteger i = 0; i < layerCount; i++)
+                [colors addObject:UIColor.tintColor];
+            UIImageSymbolConfiguration *paletteConfiguration = [UIImageSymbolConfiguration configurationWithPaletteColors:colors];
+            configuration = [configuration configurationByApplyingConfiguration:paletteConfiguration];
+            return %orig(configuration);
+        }
+    }
+    return image;
+}
+
+%end
+
+%hook _UIAssetManager
+
+- (UIImage *)imageNamed:(NSString *)name configuration:(UIImageConfiguration *)configuration {
+    UIImage *image = %orig;
     if (IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0)) {
         if ([configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0) {
             if (shouldUsePaletteColors(name)) {
@@ -118,25 +150,6 @@ static UIImage *imageWithExtraConfigurationIfNeeded(UIImage *image, NSString *na
         }
     }
     return image;
-}
-
-%hook UIImage
-
-- (UIImage *)imageWithConfiguration:(UIImageConfiguration *)configuration {
-    UIImage *image = %orig;
-    NSString *name = nil;
-    @try {
-        name = image.imageAsset.assetName;
-    } @catch (id ex) {}
-    return imageWithExtraConfigurationIfNeeded(image, name, configuration);
-}
-
-%end
-
-%hook _UIAssetManager
-
-- (UIImage *)imageNamed:(NSString *)name configuration:(UIImageConfiguration *)configuration {
-    return imageWithExtraConfigurationIfNeeded(%orig, name, configuration);
 }
 
 %end
