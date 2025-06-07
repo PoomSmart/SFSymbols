@@ -124,7 +124,11 @@ static UIImage *imageWithExtraConfigurationIfNeeded(UIImage *image, NSString *na
 
 - (UIImage *)imageWithConfiguration:(UIImageConfiguration *)configuration {
     UIImage *image = %orig;
-    return imageWithExtraConfigurationIfNeeded(image, image.imageAsset.assetName, configuration);
+    NSString *name = nil;
+    @try {
+        name = image.imageAsset.assetName;
+    } @catch (id ex) {}
+    return imageWithExtraConfigurationIfNeeded(image, name, configuration);
 }
 
 %end
