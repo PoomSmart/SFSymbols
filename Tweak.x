@@ -93,12 +93,20 @@ static NSBundle *privateBundle() {
 %end
 
 static BOOL shouldUsePaletteColors(NSString *name) {
-    return [name containsString:@"stack"]
-        || [name containsString:@"speaker"]
+    if ([name isEqualToString:@"homepod.mini.arrow.forward.fill"]
+        || [name isEqualToString:@"homepod.arrow.forward.fill"])
+        return NO;
+    if ([name containsString:@".on."] && [name hasSuffix:@".fill"])
+        return YES;
+    return [name containsString:@"homepod"]
         || [name containsString:@"shared.with.you"]
         || [name containsString:@"sharedwithyou"]
-        || [name isEqualToString:@"photo.fill.on.rectangle.fill"]
+        || [name containsString:@"slash"]
+        || [name containsString:@"speaker"]
+        || [name containsString:@"stack"]
+        || [name isEqualToString:@"bell.and.waveform.fill"]
         || [name isEqualToString:@"square.and.pencil"]
+        || [name hasPrefix:@"bell.badge"]
         || [name hasPrefix:@"person.2"]
         || [name hasPrefix:@"square.and.arrow"];
 }
