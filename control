@@ -1,6 +1,6 @@
 Package: com.ps.sfsymbols
 Name: SFSymbols
-Version: 1.0.9
+Version: 1.0.10
 Architecture: iphoneos-arm
 Description: Backports latest SF Symbols to older iOS versions.
 Maintainer: PoomSmart

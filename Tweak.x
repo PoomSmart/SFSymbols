@@ -94,18 +94,33 @@ static NSBundle *privateBundle() {
 
 static BOOL shouldUsePaletteColors(NSString *name) {
     if ([name isEqualToString:@"homepod.mini.arrow.forward.fill"]
-        || [name isEqualToString:@"homepod.arrow.forward.fill"])
+        || [name isEqualToString:@"homepod.arrow.forward.fill"]
+        || [name isEqualToString:@"square.and.arrow.up.fill"]
+        || [name isEqualToString:@"square.and.arrow.down.on.square.fill"])
         return NO;
     if ([name containsString:@".on."] && [name hasSuffix:@".fill"])
         return YES;
     return [name containsString:@"homepod"]
+        || [name containsString:@"joystick"]
         || [name containsString:@"shared.with.you"]
         || [name containsString:@"sharedwithyou"]
         || [name containsString:@"slash"]
         || [name containsString:@"speaker"]
         || [name containsString:@"stack"]
+        || [name containsString:@"tray.and.arrow.down"]
+        || [name containsString:@"tray.and.arrow.up"]
+        || [name isEqualToString:@"applewatch.and.arrow.forward.rtl"]
         || [name isEqualToString:@"bell.and.waveform.fill"]
+        || [name isEqualToString:@"desktopcomputer.and.arrow.down"]
+        || [name isEqualToString:@"display.and.arrow.down"]
+        || [name isEqualToString:@"icloud.and.arrow.down"]
+        || [name isEqualToString:@"icloud.and.arrow.up"]
+        || [name isEqualToString:@"laptopcomputer.and.arrow.down"]
+        || [name isEqualToString:@"mirror.side.left.and.arrow.turn.down.right"]
+        || [name isEqualToString:@"mirror.side.right.and.arrow.turn.down.left"]
+        || [name isEqualToString:@"shippingbox.and.arrow.backward"]
         || [name isEqualToString:@"square.and.pencil"]
+        || [name isEqualToString:@"vision.pro.and.arrow.forward"]
         || [name hasPrefix:@"bell.badge"]
         || [name hasPrefix:@"person.2"]
         || [name hasPrefix:@"square.and.arrow"];
