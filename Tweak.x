@@ -1,41 +1,29 @@
 #define CHECK_TARGET
+#import "GlyphSupport.h"
 #import <Foundation/NSBundle.h>
 #import <HBLog.h>
 #import <PSHeader/iOSVersions.h>
 #import <PSHeader/PS.h>
 #import <UIKit/UIImage.h>
-#import <UIKit/UIImageAsset+Private.h>
-#import <UIKit/UIImageSymbolConfiguration.h>
+#import <objc/runtime.h>
 
 @interface SFSSymbolAssetInfo : NSObject
 - (instancetype)initWithName:(NSString *)name bundle:(NSBundle *)bundle andType:(NSInteger)type;
 @end
 
-@interface UIColor (Private)
-+ (instancetype)tintColor;
-@end
-
-@interface UIImage (Private)
-- (NSUInteger)_numberOfHierarchyLayers;
-@end
-
-@interface UIImageSymbolConfiguration (Compat)
-+ (instancetype)configurationWithPaletteColors:(NSArray <UIColor *> *)colors;
-@end
-
-@interface UIImageSymbolConfiguration (Private)
-- (NSArray <UIColor *> *)_colors;
-@end
-
 static NSMutableArray <NSString *> *allPublicSymbols;
 static NSMutableArray <NSString *> *allPrivateSymbols;
+
+static NSBundle *bundleAtSupportPath(NSString *name) {
+    NSString *path = PS_ROOT_PATH_NS(([@"/Library/Application Support/SFSymbols/" stringByAppendingString:name]));
+    return [NSBundle bundleWithPath:path];
+}
 
 static NSBundle *publicBundle() {
     static NSBundle *bundle = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        NSString *path = PS_ROOT_PATH_NS(@"/Library/Application Support/SFSymbols/CoreGlyphs.bundle");
-        bundle = [NSBundle bundleWithPath:path];
+        bundle = bundleAtSupportPath(@"CoreGlyphs.bundle");
     });
     return bundle;
 }
@@ -44,20 +32,40 @@ static NSBundle *privateBundle() {
     static NSBundle *bundle = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        NSString *path = PS_ROOT_PATH_NS(@"/Library/Application Support/SFSymbols/CoreGlyphsPrivate.bundle");
-        bundle = [NSBundle bundleWithPath:path];
+        bundle = bundleAtSupportPath(@"CoreGlyphsPrivate.bundle");
     });
     return bundle;
+}
+
+static NSBundle *priorityBundle() {
+    static NSBundle *bundle = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        bundle = bundleAtSupportPath(@"CoreGlyphsPriority.bundle");
+    });
+    return bundle;
+}
+
+static SFSSymbolAssetInfo *fillMissingAssetInfo(SFSSymbolAssetInfo *info, NSString *name, BOOL allowsPrivate) {
+    if (info != nil)
+        return info;
+    if ([allPublicSymbols containsObject:name])
+        return [[%c(SFSSymbolAssetInfo) alloc] initWithName:name bundle:publicBundle() andType:0];
+    if (allowsPrivate && [allPrivateSymbols containsObject:name])
+        return [[%c(SFSSymbolAssetInfo) alloc] initWithName:name bundle:privateBundle() andType:1];
+    return info;
 }
 
 %hook NSBundle
 
 + (NSBundle *)bundleWithPath:(NSString *)path {
     NSBundle *bundle = nil;
-    if ([path isEqualToString:@"/System/Library/CoreServices/CoreGlyphs.bundle"])
+    if ([path hasSuffix:@"/CoreGlyphs.bundle"])
         bundle = publicBundle();
-    else if ([path isEqualToString:@"/System/Library/CoreServices/CoreGlyphsPrivate.bundle"])
+    else if ([path hasSuffix:@"/CoreGlyphsPrivate.bundle"])
         bundle = privateBundle();
+    else if ([path hasSuffix:@"/CoreGlyphsPriority.bundle"])
+        bundle = priorityBundle();
     return bundle ?: %orig;
 }
 
@@ -77,102 +85,29 @@ static NSBundle *privateBundle() {
 
 %end
 
+%group priorityBundleHook
+
+%hook SFSCoreGlyphsBundle
+
++ (NSBundle *)priority {
+    NSBundle *bundle = priorityBundle();
+    return bundle ?: %orig;
+}
+
+%end
+
+%end
+
 %hook SFSSymbolAssetInfo
 
 + (SFSSymbolAssetInfo *)localeAgnosticInfo:(NSString *)name allowsPrivate:(BOOL)allowsPrivate {
     SFSSymbolAssetInfo *info = %orig;
-    if (info == nil) {
-        if ([allPublicSymbols containsObject:name])
-            info = [[%c(SFSSymbolAssetInfo) alloc] initWithName:name bundle:publicBundle() andType:0];
-        if (allowsPrivate && [allPrivateSymbols containsObject:name])
-            info = [[%c(SFSSymbolAssetInfo) alloc] initWithName:name bundle:privateBundle() andType:1];
-    }
-    return info;
+    return fillMissingAssetInfo(info, name, allowsPrivate);
 }
 
-%end
-
-static BOOL shouldUsePaletteColors(NSString *name) {
-    if ([name isEqualToString:@"homepod.mini.arrow.forward.fill"]
-        || [name isEqualToString:@"homepod.arrow.forward.fill"]
-        || [name isEqualToString:@"square.and.arrow.up.fill"]
-        || [name isEqualToString:@"square.and.arrow.down.on.square.fill"])
-        return NO;
-    if ([name containsString:@".on."] && [name hasSuffix:@".fill"])
-        return YES;
-    return [name containsString:@"homepod"]
-        || [name containsString:@"joystick"]
-        || [name containsString:@"shared.with.you"]
-        || [name containsString:@"sharedwithyou"]
-        || [name containsString:@"slash"]
-        || [name containsString:@"speaker"]
-        || [name containsString:@"stack"]
-        || [name containsString:@"tray.and.arrow.down"]
-        || [name containsString:@"tray.and.arrow.up"]
-        || [name isEqualToString:@"applewatch.and.arrow.forward.rtl"]
-        || [name isEqualToString:@"bell.and.waveform.fill"]
-        || [name isEqualToString:@"desktopcomputer.and.arrow.down"]
-        || [name isEqualToString:@"display.and.arrow.down"]
-        || [name isEqualToString:@"icloud.and.arrow.down"]
-        || [name isEqualToString:@"icloud.and.arrow.up"]
-        || [name isEqualToString:@"laptopcomputer.and.arrow.down"]
-        || [name isEqualToString:@"mirror.side.left.and.arrow.turn.down.right"]
-        || [name isEqualToString:@"mirror.side.right.and.arrow.turn.down.left"]
-        || [name isEqualToString:@"shippingbox.and.arrow.backward"]
-        || [name isEqualToString:@"square.and.pencil"]
-        || [name isEqualToString:@"vision.pro.and.arrow.forward"]
-        || [name hasPrefix:@"bell.badge"]
-        || [name hasPrefix:@"person.2"]
-        || [name hasPrefix:@"square.and.arrow"];
-}
-
-static BOOL shouldPlay(UIImageConfiguration *configuration) {
-    return IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0) && [configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0;
-}
-
-%hook UIImage
-
-- (UIImage *)imageWithConfiguration:(UIImageConfiguration *)configuration {
-    UIImage *image = %orig;
-    if (shouldPlay(configuration)) {
-        NSString *name = nil;
-        @try {
-            name = image.imageAsset.assetName;
-        } @catch (id ex) {}
-        if (shouldUsePaletteColors(name)) {
-            HBLogDebug(@"Using palette colors for image named '%@'", name);
-            NSUInteger layerCount = [image _numberOfHierarchyLayers];
-            NSMutableArray <UIColor *> *colors = [NSMutableArray arrayWithCapacity:layerCount];
-            for (NSUInteger i = 0; i < layerCount; i++)
-                [colors addObject:UIColor.tintColor];
-            UIImageSymbolConfiguration *paletteConfiguration = [UIImageSymbolConfiguration configurationWithPaletteColors:colors];
-            configuration = [configuration configurationByApplyingConfiguration:paletteConfiguration];
-            return %orig(configuration);
-        }
-    }
-    return image;
-}
-
-%end
-
-%hook _UIAssetManager
-
-- (UIImage *)imageNamed:(NSString *)name configuration:(UIImageConfiguration *)configuration {
-    UIImage *image = %orig;
-    if (IS_IOS_BETWEEN_EEX(iOS_15_0, iOS_16_0)) {
-        if ([configuration isKindOfClass:UIImageSymbolConfiguration.class] && [(UIImageSymbolConfiguration *)configuration _colors].count == 0) {
-            if (shouldUsePaletteColors(name)) {
-                HBLogDebug(@"Using palette colors for image named '%@'", name);
-                NSUInteger layerCount = [image _numberOfHierarchyLayers];
-                NSMutableArray <UIColor *> *colors = [NSMutableArray arrayWithCapacity:layerCount];
-                for (NSUInteger i = 0; i < layerCount; i++)
-                    [colors addObject:UIColor.tintColor];
-                UIImageSymbolConfiguration *paletteConfiguration = [UIImageSymbolConfiguration configurationWithPaletteColors:colors];
-                return [image imageWithConfiguration:[configuration configurationByApplyingConfiguration:paletteConfiguration]];
-            }
-        }
-    }
-    return image;
++ (SFSSymbolAssetInfo *)infoForName:(NSString *)name allowsPrivate:(BOOL)allowsPrivate {
+    SFSSymbolAssetInfo *info = %orig;
+    return fillMissingAssetInfo(info, name, allowsPrivate);
 }
 
 %end
@@ -209,7 +144,11 @@ static BOOL shouldPlay(UIImageConfiguration *configuration) {
         [allPrivateSymbols addObjectsFromArray:symbolArray];
     }
     %init;
-    if (!IS_IOS_OR_NEWER(iOS_15_0)) {
+    if (!IS_IOS_OR_NEWER(iOS_16_0))
+        SFSInitCARCompat();
+    Class bundleClass = %c(SFSCoreGlyphsBundle);
+    if (bundleClass && class_getClassMethod(bundleClass, @selector(priority)))
+        %init(priorityBundleHook);
+    if (!IS_IOS_OR_NEWER(iOS_15_0))
         %init(preiOS15);
-    }
 }

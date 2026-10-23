@@ -11,7 +11,8 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = SFSymbols
 
-$(TWEAK_NAME)_FILES = Tweak.x
+$(TWEAK_NAME)_FILES = Tweak.x CARCompat.x
 $(TWEAK_NAME)_CFLAGS = -fobjc-arc
+$(TWEAK_NAME)_LDFLAGS = -Wl,-U,_CGContextDrawSVGDocument
 
 include $(THEOS_MAKE_PATH)/tweak.mk
