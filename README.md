@@ -12,7 +12,7 @@ The dylib is injected into processes that link UIKit (`com.apple.UIKit`), and on
 
 ```mermaid
 flowchart TD
-  call["systemImageNamed: or Image(systemName:)"]
+  entry["systemImageNamed: or Image(systemName:)"]
   fw{"iOS 16 or newer?"}
   info["SFSSymbolAssetInfo"]
   known{"Name is in the system catalog?"}
@@ -26,12 +26,18 @@ flowchart TD
   native["CoreUI composites monochrome-N"]
   compat["SFSDrawMonochromeLayers"]
 
-  call --> fw
-  fw -->|yes| info --> known
+  entry --> fw
+  fw -->|yes| info
+  info --> known
   known -->|yes| bundle
-  known -->|no| lists --> bundle
-  fw -->|no| path --> bundle
-  bundle --> car --> glyph --> svg --> draw
+  known -->|no| lists
+  lists --> bundle
+  fw -->|no| path
+  path --> bundle
+  bundle --> car
+  car --> glyph
+  glyph --> svg
+  svg --> draw
   draw -->|yes| native
   draw -->|no| compat
 ```
@@ -50,12 +56,16 @@ flowchart TD
   shapes["Shape nodes"]
   group["Group by monochrome-N"]
   union["Union the paths in that class"]
-  style["Read .monochrome-N"]
+  rule["Read .monochrome-N"]
   order["Fill classes in numeric order"]
   copy["clear-behind: Copy blend"]
   normal["otherwise: normal blend"]
 
-  svg --> shapes --> group --> union --> style --> order
+  svg --> shapes
+  shapes --> group
+  group --> union
+  union --> rule
+  rule --> order
   order --> copy
   order --> normal
 ```
