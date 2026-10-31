@@ -5,7 +5,21 @@
 #import <PSHeader/iOSVersions.h>
 #import <PSHeader/PS.h>
 #import <UIKit/UIImage.h>
+#import <UIKit/UIImageAsset.h>
+#import <UIKit/UIImageConfiguration.h>
 #import <objc/runtime.h>
+
+@interface UIImage (SFSSymbolContent)
+- (id)content;
+@end
+
+@interface UIImageAsset (SFSName)
+- (NSString *)assetName;
+@end
+
+@interface _UIImageSymbolLayer : NSObject
+- (UIImageAsset *)asset;
+@end
 
 @interface SFSSymbolAssetInfo : NSObject
 - (instancetype)initWithName:(NSString *)name bundle:(NSBundle *)bundle andType:(NSInteger)type;
@@ -98,6 +112,56 @@ static SFSSymbolAssetInfo *fillMissingAssetInfo(SFSSymbolAssetInfo *info, NSStri
 
 %end
 
+static UIImage *SFSImageOrDrawn(NSString *name, UIImage *image) {
+    if (image || name.length == 0)
+        return image;
+    return SFSMonochromeSymbolImage(publicBundle(), name) ?: SFSMonochromeSymbolImage(privateBundle(), name);
+}
+
+%group CompositeLayers
+
+%hook UIImage
+
+// Safari's toolbar asks for these names with a symbol configuration. iOS 14's
+// CoreGlyphs lookup returns nil when that configuration misses, and the button
+// then shows its accessibility title.
++ (UIImage *)systemImageNamed:(NSString *)name {
+    UIImage *image = %orig;
+    return SFSImageOrDrawn(name, image);
+}
+
++ (UIImage *)systemImageNamed:(NSString *)name withConfiguration:(UIImageConfiguration *)configuration {
+    UIImage *image = %orig;
+    return SFSImageOrDrawn(name, image);
+}
+
+// A layer whose image has no content is inserted with addObject: and throws.
++ (UIImage *)_generateCompositedSymbolImageForAsset:(UIImageAsset *)asset usingLayers:(NSArray *)layers configuration:(UIImageConfiguration *)configuration alignUsingBaselines:(BOOL)align {
+    static __thread int depth;
+    if (depth > 3)
+        return nil;
+    if (layers.count == 0)
+        return %orig;
+
+    NSMutableArray *usable = [NSMutableArray arrayWithCapacity:layers.count];
+    depth++;
+    for (_UIImageSymbolLayer *layer in layers) {
+        UIImage *image = [[layer asset] imageWithConfiguration:configuration];
+        if ([image content])
+            [usable addObject:layer];
+    }
+    depth--;
+    if (usable.count == 0)
+        return SFSMonochromeSymbolImage(publicBundle(), [asset assetName]) ?: SFSMonochromeSymbolImage(privateBundle(), [asset assetName]);
+    if (usable.count == layers.count)
+        return %orig;
+    return %orig(asset, usable, configuration, align);
+}
+
+%end
+
+%end
+
 %hook SFSSymbolAssetInfo
 
 + (SFSSymbolAssetInfo *)localeAgnosticInfo:(NSString *)name allowsPrivate:(BOOL)allowsPrivate {
@@ -131,6 +195,8 @@ static SFSSymbolAssetInfo *fillMissingAssetInfo(SFSSymbolAssetInfo *info, NSStri
     %init;
     if (!IS_IOS_OR_NEWER(iOS_16_0))
         SFSInitCARCompat();
+    if (!IS_IOS_OR_NEWER(iOS_15_0))
+        %init(CompositeLayers);
     Class bundleClass = %c(SFSCoreGlyphsBundle);
     if (bundleClass && class_getClassMethod(bundleClass, @selector(priority)))
         %init(priorityBundleHook);

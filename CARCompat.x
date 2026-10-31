@@ -22,6 +22,7 @@ typedef CGSVGAttributeRef (*SFSMapGetFn)(CGSVGAttributeMapRef, uintptr_t);
 typedef Boolean (*SFSGetFloatFn)(CGSVGAttributeRef, double *);
 typedef uintptr_t (*SFSAtomFn)(CFStringRef);
 typedef CGAffineTransform (*SFSNodeTransformFn)(CGSVGNodeRef);
+typedef Boolean (*SFSAttrTransformFn)(CGSVGAttributeRef, CGAffineTransform *);
 typedef Boolean (*SFSBoolAttributeFn)(CGSVGAttributeRef);
 typedef void (*SFSDocumentWriteFn)(CGSVGDocumentRef, CFMutableDataRef, CFDictionaryRef);
 
@@ -37,6 +38,7 @@ static SFSMapGetFn SFSMapGet;
 static SFSGetFloatFn SFSGetFloat;
 static SFSAtomFn SFSAtomFromString;
 static SFSNodeTransformFn SFSNodeTransform;
+static SFSAttrTransformFn SFSAttrTransform;
 static SFSBoolAttributeFn SFSBoolAttribute;
 static SFSDocumentWriteFn SFSDocumentWrite;
 static uintptr_t SFSClearBehindAtom;
@@ -60,6 +62,7 @@ static void SFSLoadSVG(void) {
         SFSGetFloat = dlsym(svg, "CGSVGAttributeGetFloat");
         SFSAtomFromString = dlsym(svg, "CGSVGAtomFromString");
         SFSDocumentWrite = dlsym(svg, "CGSVGDocumentWriteToData");
+        SFSAttrTransform = dlsym(svg, "CGSVGAttributeGetTransform");
         if (ui) {
             SFSNodeTransform = dlsym(ui, "CUISVGNodeGetTransform");
             SFSBoolAttribute = dlsym(ui, "CUISVGAttributeGetBoolean");
@@ -85,6 +88,20 @@ static CGAffineTransform SFSDocumentTransform(CGSVGDocumentRef document) {
     if (parts.count != 6)
         return CGAffineTransformIdentity;
     return CGAffineTransformMake(parts[0].doubleValue, parts[1].doubleValue, parts[2].doubleValue, parts[3].doubleValue, parts[4].doubleValue, parts[5].doubleValue);
+}
+
+// iOS 15 CoreUI reads attribute 0x3f inside CUISVGNodeGetTransform. iOS 13 and 14
+// have the same attribute on the shape node, but that CoreUI function does not exist.
+static CGAffineTransform SFSShapeTransform(CGSVGNodeRef node, CGAffineTransform fallback) {
+    if (SFSNodeTransform)
+        return SFSNodeTransform(node);
+    if (SFSAttrTransform && SFSFindAttribute) {
+        CGSVGAttributeRef attribute = SFSFindAttribute(node, 0x3f);
+        CGAffineTransform transform;
+        if (attribute && SFSAttrTransform(attribute, &transform))
+            return transform;
+    }
+    return fallback;
 }
 
 // iOS 15 monochrome fills every shape as one path, so an opacity-0 knockout
@@ -121,7 +138,7 @@ static BOOL SFSDrawMonochromeLayers(CGContextRef context, CGSVGDocumentRef docum
         CGPathRef raw = SFSCreatePath(shape);
         if (!raw)
             return;
-        CGAffineTransform xform = SFSNodeTransform ? SFSNodeTransform(node) : documentTransform;
+        CGAffineTransform xform = SFSShapeTransform(node, documentTransform);
         CGPathRef path = CGPathCreateCopyByTransformingPath(raw, &xform);
         CGPathRelease(raw);
         if (!path)
@@ -185,7 +202,9 @@ static BOOL SFSDrawMonochromeLayers(CGContextRef context, CGSVGDocumentRef docum
             continue;
         ink = CGRectIsNull(ink) ? bounds : CGRectUnion(ink, bounds);
     }
-    if (!(ink.size.width > 0 && ink.size.height > 0 && ink.size.width <= canvas.width * 1.05 && ink.size.height <= canvas.height * 1.05))
+    // A missing transform leaves path coordinates far outside the canvas. Map that
+    // box onto the destination instead of clipping it to the canvas.
+    if (!(ink.size.width > 0 && ink.size.height > 0 && isfinite(ink.origin.x) && isfinite(ink.origin.y) && isfinite(ink.size.width) && isfinite(ink.size.height) && ink.size.width < 100000 && ink.size.height < 100000))
         ink = CGRectMake(0, 0, canvas.width, canvas.height);
     CGSize dest = alreadyScaled ? canvas : CGSizeMake(targetSize.width * scale, targetSize.height * scale);
     CGContextSaveGState(context);
@@ -214,8 +233,16 @@ static BOOL SFSDrawMonochromeLayers(CGContextRef context, CGSVGDocumentRef docum
 @interface CUINamedVectorGlyph : NSObject
 - (CUIThemeRendition *)_rendition;
 - (CGSize)referenceCanvasSize;
+- (CGRect)alignmentRect;
+- (CGFloat)referencePointSize;
 - (CGFloat)scale;
 - (CGFloat)_requestedPointSizeRatio;
+@end
+
+@interface CUICatalog : NSObject
+- (instancetype)initWithName:(NSString *)name fromBundle:(NSBundle *)bundle error:(NSError **)error;
+- (id)_baseVectorGlyphForName:(NSString *)name;
+- (CUINamedVectorGlyph *)namedVectorGlyphWithName:(NSString *)name scaleFactor:(CGFloat)scale deviceIdiom:(NSInteger)idiom layoutDirection:(NSInteger)direction glyphSize:(NSInteger)glyphSize glyphWeight:(NSInteger)weight glyphPointSize:(CGFloat)pointSize appearanceName:(NSString *)appearance;
 @end
 
 @interface _UIImageCUIVectorGlyphContent : NSObject
@@ -223,6 +250,7 @@ static BOOL SFSDrawMonochromeLayers(CGContextRef context, CGSVGDocumentRef docum
 - (CGFloat)vectorScale;
 - (CGFloat)scale;
 - (CGSize)sizeInPixels;
+- (CGImageRef)_CGImageWithSize:(CGSize)size scale:(CGFloat)scale;
 @end
 
 static CGSVGDocumentRef SFSGlyphDocument(CUINamedVectorGlyph *glyph) {
@@ -288,6 +316,54 @@ static CGImageRef SFSMonochromeImage(CUINamedVectorGlyph *glyph, CGFloat scale, 
     BOOL drew = SFSDrawMonochromeLayers(context, document, NULL, NO, scale, target, canvas);
     CGImageRef image = drew ? CGBitmapContextCreateImage(context) : NULL;
     CGContextRelease(context);
+    return image;
+}
+
+static CUICatalog *SFSCatalog(NSBundle *bundle) {
+    static NSMapTable *catalogs;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        catalogs = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsObjectPointerPersonality | NSPointerFunctionsWeakMemory valueOptions:NSPointerFunctionsStrongMemory];
+    });
+    if (!bundle)
+        return nil;
+    CUICatalog *catalog = [catalogs objectForKey:bundle];
+    if (catalog)
+        return catalog;
+    catalog = [[%c(CUICatalog) alloc] initWithName:@"Assets" fromBundle:bundle error:nil];
+    if (catalog)
+        [catalogs setObject:catalog forKey:bundle];
+    return catalog;
+}
+
+static CGSize SFSSymbolPointSize(CUINamedVectorGlyph *glyph) {
+    CGSize box = [glyph alignmentRect].size;
+    if (box.width >= 1 && box.height >= 1 && box.width <= 200 && box.height <= 200)
+        return box;
+    CGFloat point = [glyph referencePointSize];
+    if (point >= 1 && point <= 200)
+        return CGSizeMake(point, point);
+    return CGSizeMake(22, 22);
+}
+
+UIImage *SFSMonochromeSymbolImage(NSBundle *bundle, NSString *name) {
+    if (!bundle || name.length == 0)
+        return nil;
+    CUICatalog *catalog = SFSCatalog(bundle);
+    if (!catalog)
+        return nil;
+    CGFloat scale = [UIScreen mainScreen].scale;
+    if (scale <= 0)
+        scale = 1;
+    id found = [catalog namedVectorGlyphWithName:name scaleFactor:scale deviceIdiom:0 layoutDirection:5 glyphSize:2 glyphWeight:4 glyphPointSize:22 appearanceName:nil];
+    if (![found isKindOfClass:%c(CUINamedVectorGlyph)])
+        return nil;
+    CUINamedVectorGlyph *glyph = found;
+    CGImageRef rendered = SFSMonochromeImage(glyph, scale, SFSSymbolPointSize(glyph));
+    if (!rendered)
+        return nil;
+    UIImage *image = [[UIImage imageWithCGImage:rendered scale:scale orientation:UIImageOrientationUp] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    CGImageRelease(rendered);
     return image;
 }
 
@@ -398,11 +474,43 @@ extern void CGContextDrawSVGDocument(CGContextRef context, CGSVGDocumentRef docu
     return (CGImageRef)CFAutorelease(CGImageRetain(image));
 }
 
+// Callers CGImageRelease this. rasterizeImageUsingScaleFactor:forTargetSize: has the same ownership.
 - (CGImageRef)_provideCGImageWithSize:(CGSize)size scale:(CGFloat)scale {
     CGImageRef image = SFSMonochromeImage([self vectorGlyph], scale, size);
     if (image)
-        return (CGImageRef)CFAutorelease(image);
+        return image;
     return %orig;
+}
+
+- (CGImageRef)_CGImageWithSize:(CGSize)size scale:(CGFloat)scale {
+    CGImageRef image = SFSMonochromeImage([self vectorGlyph], scale, size);
+    if (image)
+        return image;
+    return %orig;
+}
+
+%end
+%end
+
+// CoreUI returns nil when glyphPointSize is 0. A zero glyph size misses the
+// medium rendition. Layout direction 0 only matches undirected glyphs, so
+// left-to-right becomes pointing-right (5) and right-to-left becomes
+// pointing-left (4). Those searches still fall back to an undirected glyph.
+%group CatalogLookup
+%hook CUICatalog
+
+- (CUINamedVectorGlyph *)namedVectorGlyphWithName:(NSString *)name scaleFactor:(CGFloat)scale deviceIdiom:(NSInteger)idiom layoutDirection:(NSInteger)direction glyphSize:(NSInteger)glyphSize glyphWeight:(NSInteger)weight glyphPointSize:(CGFloat)pointSize appearanceName:(NSString *)appearance {
+    if (!(pointSize > 0))
+        pointSize = 22;
+    if (glyphSize <= 0)
+        glyphSize = 2;
+    if (weight <= 0)
+        weight = 4;
+    if (direction == 0)
+        direction = 5;
+    else if (direction == 1)
+        direction = 4;
+    return %orig(name, scale, idiom, direction, glyphSize, weight, pointSize, appearance);
 }
 
 %end
@@ -410,9 +518,10 @@ extern void CGContextDrawSVGDocument(CGContextRef context, CGSVGDocumentRef docu
 
 void SFSInitCARCompat(void) {
     SFSLoadSVG();
+    %init(CatalogLookup);
     %init(GlyphHooks);
     Class content = %c(_UIImageCUIVectorGlyphContent);
-    if (content && [content instancesRespondToSelector:@selector(_provideCGImageWithSize:scale:)])
+    if (content && ([content instancesRespondToSelector:@selector(_provideCGImageWithSize:scale:)] || [content instancesRespondToSelector:@selector(_CGImageWithSize:scale:)]))
         %init(ImageContent);
     if (SFSNodeTransform && CGContextDrawSVGDocument)
         %init(DrawSVG);

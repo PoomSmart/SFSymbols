@@ -84,4 +84,4 @@ If a document has no `monochrome-` tokens, the tweak calls the original method.
 
 `referenceCanvasSize` is the layout box. The paths sit in a smaller ink rect inside it. The draw maps that ink rect onto the destination, with a Y flip, so the glyph fills the box instead of staying in the top left at its raw path size. On iOS 13, where `referenceCanvasSize` is absent, the canvas size is parsed from the SVG `viewBox`.
 
-Node transforms come from CoreUI on iOS 15. On iOS 13 and 14 the first `transform="matrix(...)"` in the document is used. The bitmap is sized to the image's pixel size, so an image view or tab bar icon fills its layout box. Variable Color stays with the system.
+Node transforms come from CoreUI on iOS 15. On iOS 13 and 14 the same transform is read from the shape node directly. The bitmap is sized to the image's pixel size, so an image view or tab bar icon fills its layout box. Variable Color stays with the system.
