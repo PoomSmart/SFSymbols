@@ -112,21 +112,6 @@ static SFSSymbolAssetInfo *fillMissingAssetInfo(SFSSymbolAssetInfo *info, NSStri
 
 %end
 
-%group preiOS15
-
-%hook UITableConstants_IOS
-
-- (UIImage *)defaultDeleteImageWithTintColor:(UIColor *)tintColor backgroundColor:(UIColor *)backgroundColor {
-    UIImage *image = [UIImage systemImageNamed:@"minus.circle.fill"];
-    if (tintColor)
-        image = [image imageWithTintColor:tintColor];
-    return image;
-}
-
-%end
-
-%end
-
 %ctor {
     if (!isTarget(TargetTypeApps | TargetTypeGenericExtensions)) return;
     NSBundle *public = publicBundle();
@@ -149,6 +134,4 @@ static SFSSymbolAssetInfo *fillMissingAssetInfo(SFSSymbolAssetInfo *info, NSStri
     Class bundleClass = %c(SFSCoreGlyphsBundle);
     if (bundleClass && class_getClassMethod(bundleClass, @selector(priority)))
         %init(priorityBundleHook);
-    if (!IS_IOS_OR_NEWER(iOS_15_0))
-        %init(preiOS15);
 }
