@@ -5,7 +5,6 @@
 #import <dlfcn.h>
 #import <objc/runtime.h>
 
-typedef struct CGSVGDocument *CGSVGDocumentRef;
 typedef struct CGSVGNode *CGSVGNodeRef;
 typedef struct CGSVGAttribute *CGSVGAttributeRef;
 typedef struct CGSVGAttributeMap *CGSVGAttributeMapRef;
@@ -107,7 +106,7 @@ static CGAffineTransform SFSShapeTransform(CGSVGNodeRef node, CGAffineTransform 
 // iOS 15 monochrome fills every shape as one path, so an opacity-0 knockout
 // punches a hole through the glyph. Later systems draw each monochrome-N
 // class on its own and copy-erase clear-behind layers first.
-static BOOL SFSDrawMonochromeLayers(CGContextRef context, CGSVGDocumentRef document, CGColorRef fillColor, BOOL alreadyScaled, CGFloat scale, CGSize targetSize, CGSize canvas) {
+static BOOL SFSDrawMonochromeLayers(CGContextRef context, CGSVGDocumentRef document, CGColorRef fillColor, BOOL alreadyScaled, CGFloat scale, CGSize targetSize, CGSize canvas, BOOL mapInk) {
     if (!context || !document || !SFSGetRoot || !SFSEnumerate || !SFSGetType || !SFSShapePath || !SFSCreatePath || !SFSFindAttribute || !SFSGetFloat)
         return NO;
     if (canvas.width <= 0 || canvas.height <= 0) {
@@ -193,8 +192,6 @@ static BOOL SFSDrawMonochromeLayers(CGContextRef context, CGSVGDocumentRef docum
     [names sortUsingComparator:^NSComparisonResult(NSString *lhs, NSString *rhs) {
         return [lhs compare:rhs options:NSNumericSearch];
     }];
-    // referenceCanvasSize can be the layout box. The paths only occupy the
-    // smaller ink rect inside it, which otherwise stays pinned to the top left.
     CGRect ink = CGRectNull;
     for (NSString *name in names) {
         CGRect bounds = CGPathGetPathBoundingBox((__bridge CGPathRef)groups[name][@"path"]);
@@ -202,15 +199,15 @@ static BOOL SFSDrawMonochromeLayers(CGContextRef context, CGSVGDocumentRef docum
             continue;
         ink = CGRectIsNull(ink) ? bounds : CGRectUnion(ink, bounds);
     }
-    // A missing transform leaves path coordinates far outside the canvas. Map that
-    // box onto the destination instead of clipping it to the canvas.
-    if (!(ink.size.width > 0 && ink.size.height > 0 && isfinite(ink.origin.x) && isfinite(ink.origin.y) && isfinite(ink.size.width) && isfinite(ink.size.height) && ink.size.width < 100000 && ink.size.height < 100000))
-        ink = CGRectMake(0, 0, canvas.width, canvas.height);
+    CGRect source = CGRectMake(0, 0, canvas.width, canvas.height);
+    BOOL finite = ink.size.width > 0 && ink.size.height > 0 && isfinite(ink.origin.x) && isfinite(ink.origin.y) && isfinite(ink.size.width) && isfinite(ink.size.height) && ink.size.width < 100000 && ink.size.height < 100000;
+    if (finite && (mapInk || ink.size.width > canvas.width * 8 || ink.size.height > canvas.height * 8 || ink.origin.x < -canvas.width || ink.origin.y < -canvas.height))
+        source = ink;
     CGSize dest = alreadyScaled ? canvas : CGSizeMake(targetSize.width * scale, targetSize.height * scale);
     CGContextSaveGState(context);
-    CGContextScaleCTM(context, dest.width / ink.size.width, dest.height / ink.size.height);
+    CGContextScaleCTM(context, dest.width / source.size.width, dest.height / source.size.height);
     CGContextScaleCTM(context, 1, -1);
-    CGContextTranslateCTM(context, -ink.origin.x, -(ink.origin.y + ink.size.height));
+    CGContextTranslateCTM(context, -source.origin.x, -(source.origin.y + source.size.height));
     for (NSString *name in names) {
         NSDictionary *group = groups[name];
         CGContextSaveGState(context);
@@ -225,33 +222,6 @@ static BOOL SFSDrawMonochromeLayers(CGContextRef context, CGSVGDocumentRef docum
     CGContextRestoreGState(context);
     return YES;
 }
-
-@interface CUIThemeRendition : NSObject
-- (CGSVGDocumentRef)svgDocument;
-@end
-
-@interface CUINamedVectorGlyph : NSObject
-- (CUIThemeRendition *)_rendition;
-- (CGSize)referenceCanvasSize;
-- (CGRect)alignmentRect;
-- (CGFloat)referencePointSize;
-- (CGFloat)scale;
-- (CGFloat)_requestedPointSizeRatio;
-@end
-
-@interface CUICatalog : NSObject
-- (instancetype)initWithName:(NSString *)name fromBundle:(NSBundle *)bundle error:(NSError **)error;
-- (id)_baseVectorGlyphForName:(NSString *)name;
-- (CUINamedVectorGlyph *)namedVectorGlyphWithName:(NSString *)name scaleFactor:(CGFloat)scale deviceIdiom:(NSInteger)idiom layoutDirection:(NSInteger)direction glyphSize:(NSInteger)glyphSize glyphWeight:(NSInteger)weight glyphPointSize:(CGFloat)pointSize appearanceName:(NSString *)appearance;
-@end
-
-@interface _UIImageCUIVectorGlyphContent : NSObject
-- (CUINamedVectorGlyph *)vectorGlyph;
-- (CGFloat)vectorScale;
-- (CGFloat)scale;
-- (CGSize)sizeInPixels;
-- (CGImageRef)_CGImageWithSize:(CGSize)size scale:(CGFloat)scale;
-@end
 
 static CGSVGDocumentRef SFSGlyphDocument(CUINamedVectorGlyph *glyph) {
     CUIThemeRendition *rendition = [glyph _rendition];
@@ -283,14 +253,10 @@ static CGSize SFSGlyphCanvas(CUINamedVectorGlyph *glyph) {
 }
 
 static CGFloat SFSGlyphScale(CUINamedVectorGlyph *glyph) {
-    CGFloat scale = 0;
-    if ([glyph respondsToSelector:@selector(scale)])
-        scale = [glyph scale];
-    if ([glyph respondsToSelector:@selector(_requestedPointSizeRatio)]) {
-        CGFloat ratio = [glyph _requestedPointSizeRatio];
-        if (ratio > 0)
-            scale = (scale > 0 ? scale : 1) * ratio;
-    }
+    CGFloat scale = [glyph scale];
+    CGFloat ratio = [glyph _requestedPointSizeRatio];
+    if (ratio > 0)
+        scale = (scale > 0 ? scale : 1) * ratio;
     if (scale > 0)
         return scale;
     scale = [UIScreen mainScreen].scale;
@@ -313,7 +279,8 @@ static CGImageRef SFSMonochromeImage(CUINamedVectorGlyph *glyph, CGFloat scale, 
     CGColorSpaceRelease(space);
     if (!context)
         return NULL;
-    BOOL drew = SFSDrawMonochromeLayers(context, document, NULL, NO, scale, target, canvas);
+    BOOL mapInk = [glyph respondsToSelector:@selector(referenceCanvasSize)];
+    BOOL drew = SFSDrawMonochromeLayers(context, document, NULL, NO, scale, target, canvas, mapInk);
     CGImageRef image = drew ? CGBitmapContextCreateImage(context) : NULL;
     CGContextRelease(context);
     return image;
@@ -384,7 +351,13 @@ static CGImageRef SFSCachedGlyphImage(CUINamedVectorGlyph *glyph) {
     SFSCachedImage *cached = objc_getAssociatedObject(glyph, SFSCachedGlyphImage);
     if (cached.image)
         return (CGImageRef)CFAutorelease(CGImageRetain(cached.image));
-    CGImageRef image = SFSMonochromeImage(glyph, SFSGlyphScale(glyph), SFSGlyphCanvas(glyph));
+    CGSize target = [glyph alignmentRect].size;
+    if (target.width < 1 || target.height < 1)
+        target = SFSGlyphCanvas(glyph);
+    CGFloat scale = [glyph scale];
+    if (scale <= 0)
+        scale = SFSGlyphScale(glyph);
+    CGImageRef image = SFSMonochromeImage(glyph, scale, target);
     if (!image)
         return NULL;
     cached = [SFSCachedImage new];
@@ -414,17 +387,25 @@ extern void CGContextDrawSVGDocument(CGContextRef context, CGSVGDocumentRef docu
     return %orig;
 }
 
+%end
+%end
+
+// drawInContext: tail-branches into the five-argument draw, so a hook on the
+// public method does not see that call. Both methods exist together on iOS 15.
+%group GlyphDraw
+%hook CUINamedVectorGlyph
+
 - (void)drawInContext:(CGContextRef)context {
     CGSize canvas = SFSGlyphCanvas(self);
     CGSVGDocumentRef document = SFSGlyphDocument(self);
-    if (document && SFSDrawMonochromeLayers(context, document, NULL, NO, SFSGlyphScale(self), canvas, canvas))
+    if (document && SFSDrawMonochromeLayers(context, document, NULL, NO, SFSGlyphScale(self), canvas, canvas, YES))
         return;
     %orig;
 }
 
 - (void)_drawInContext:(CGContextRef)context scaleFactor:(CGFloat)scale targetSize:(CGSize)target fillColor:(CGColorRef)fill {
     CGSVGDocumentRef document = SFSGlyphDocument(self);
-    if (document && SFSDrawMonochromeLayers(context, document, fill, NO, scale, target, SFSGlyphCanvas(self)))
+    if (document && SFSDrawMonochromeLayers(context, document, fill, NO, scale, target, SFSGlyphCanvas(self), YES))
         return;
     %orig;
 }
@@ -434,13 +415,13 @@ extern void CGContextDrawSVGDocument(CGContextRef context, CGSVGDocumentRef docu
 
 %group DrawSVG
 %hookf(void, CGContextDrawSVGDocument, CGContextRef context, CGSVGDocumentRef document) {
-    if (SFSDrawMonochromeLayers(context, document, NULL, YES, 1, CGSizeZero, CGSizeZero))
+    if (SFSDrawMonochromeLayers(context, document, NULL, YES, 1, CGSizeZero, CGSizeZero, YES))
         return;
     %orig;
 }
 %end
 
-%group ImageContent
+%group ContentImage
 %hook _UIImageCUIVectorGlyphContent
 
 - (CGImageRef)CGImage {
@@ -451,13 +432,9 @@ extern void CGContextDrawSVGDocument(CGContextRef context, CGSVGDocumentRef docu
     if (cached.image)
         return (CGImageRef)CFAutorelease(CGImageRetain(cached.image));
     CUINamedVectorGlyph *glyph = [self vectorGlyph];
-    CGFloat scale = 0;
-    if ([self respondsToSelector:@selector(vectorScale)])
-        scale = [self vectorScale];
-    if (scale <= 0 && [self respondsToSelector:@selector(scale)])
-        scale = [self scale];
+    CGFloat scale = [self vectorScale];
     CGSize target = CGSizeZero;
-    if (scale > 0 && [self respondsToSelector:@selector(sizeInPixels)]) {
+    if (scale > 0) {
         CGSize pixels = [self sizeInPixels];
         target = CGSizeMake(pixels.width / scale, pixels.height / scale);
     }
@@ -474,13 +451,25 @@ extern void CGContextDrawSVGDocument(CGContextRef context, CGSVGDocumentRef docu
     return (CGImageRef)CFAutorelease(CGImageRetain(image));
 }
 
+%end
+%end
+
 // Callers CGImageRelease this. rasterizeImageUsingScaleFactor:forTargetSize: has the same ownership.
+%group ContentProvide
+%hook _UIImageCUIVectorGlyphContent
+
 - (CGImageRef)_provideCGImageWithSize:(CGSize)size scale:(CGFloat)scale {
     CGImageRef image = SFSMonochromeImage([self vectorGlyph], scale, size);
     if (image)
         return image;
     return %orig;
 }
+
+%end
+%end
+
+%group ContentSized
+%hook _UIImageCUIVectorGlyphContent
 
 - (CGImageRef)_CGImageWithSize:(CGSize)size scale:(CGFloat)scale {
     CGImageRef image = SFSMonochromeImage([self vectorGlyph], scale, size);
@@ -516,13 +505,34 @@ extern void CGContextDrawSVGDocument(CGContextRef context, CGSVGDocumentRef docu
 %end
 %end
 
+static BOOL SFSClassImplements(Class cls, SEL sel) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    BOOL found = NO;
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == sel) {
+            found = YES;
+            break;
+        }
+    }
+    free(methods);
+    return found;
+}
+
 void SFSInitCARCompat(void) {
     SFSLoadSVG();
     %init(CatalogLookup);
     %init(GlyphHooks);
+    Class glyph = %c(CUINamedVectorGlyph);
+    if (glyph && SFSClassImplements(glyph, @selector(drawInContext:)) && SFSClassImplements(glyph, @selector(_drawInContext:scaleFactor:targetSize:fillColor:)))
+        %init(GlyphDraw);
     Class content = %c(_UIImageCUIVectorGlyphContent);
-    if (content && ([content instancesRespondToSelector:@selector(_provideCGImageWithSize:scale:)] || [content instancesRespondToSelector:@selector(_CGImageWithSize:scale:)]))
-        %init(ImageContent);
+    if (content && SFSClassImplements(content, @selector(CGImage)))
+        %init(ContentImage);
+    if (content && SFSClassImplements(content, @selector(_provideCGImageWithSize:scale:)))
+        %init(ContentProvide);
+    if (content && SFSClassImplements(content, @selector(_CGImageWithSize:scale:)))
+        %init(ContentSized);
     if (SFSNodeTransform && CGContextDrawSVGDocument)
         %init(DrawSVG);
 }

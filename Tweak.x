@@ -4,26 +4,7 @@
 #import <HBLog.h>
 #import <PSHeader/iOSVersions.h>
 #import <PSHeader/PS.h>
-#import <UIKit/UIImage.h>
-#import <UIKit/UIImageAsset.h>
-#import <UIKit/UIImageConfiguration.h>
 #import <objc/runtime.h>
-
-@interface UIImage (SFSSymbolContent)
-- (id)content;
-@end
-
-@interface UIImageAsset (SFSName)
-- (NSString *)assetName;
-@end
-
-@interface _UIImageSymbolLayer : NSObject
-- (UIImageAsset *)asset;
-@end
-
-@interface SFSSymbolAssetInfo : NSObject
-- (instancetype)initWithName:(NSString *)name bundle:(NSBundle *)bundle andType:(NSInteger)type;
-@end
 
 static NSMutableArray <NSString *> *allPublicSymbols;
 static NSMutableArray <NSString *> *allPrivateSymbols;
